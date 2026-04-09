@@ -1,0 +1,33 @@
+{
+  "_comment": "Edit this file to customize benchmark prompts. Restart or click 'Reload tests' to apply.",
+
+  "text": [
+    {
+      "id": "cold",
+      "label": "Cold start",
+      "prompt": "What is the difference between efficiency and efficacy?"
+    },
+    {
+      "id": "hot",
+      "label": "Hot (cached)",
+      "prompt": "In one sentence, explain what Occam's razor is."
+    },
+    {
+      "id": "long",
+      "label": "Long generation",
+      "prompt": "Explain step by step how an HTTP request works: from typing a URL in the browser to the page being displayed. Cover DNS resolution, TCP handshake, HTTP headers, server processing, and rendering. Be thorough."
+    }
+  ],
+
+  "vision": {
+    "prompt": "Describe this image in detail."
+  },
+
+  "web": {
+    "prompt": "What is the current price of gold per gram in USD and EUR?"
+  },
+
+  "invoice": {
+    "prompt": "You are an accounting data extraction assistant.\nAnalyze the text of this invoice and return ONLY a valid JSON object.\nNo text before, no text after, no markdown block.\n\nExpected JSON structure (respect the exact keys):\n{\n  \"fournisseur\": \"vendor company name\",\n  \"client\": \"client company name\",\n  \"date\": \"DD/MM/YYYY\",\n  \"numero_facture\": \"invoice number\",\n  \"lignes\": [\n    {\"description\": \"...\", \"quantite\": 1, \"prix_unitaire\": 0.00, \"montant\": 0.00}\n  ],\n  \"sous_total_ht\": 0.00,\n  \"tva_taux\": 0.00,\n  \"tva_montant\": 0.00,\n  \"total_ttc\": 0.00,\n  \"mode_reglement\": \"...\",\n  \"regime_special\": \"special VAT regime text if applicable, otherwise null\"\n}\n\nInvoice text:\n{text}"
+  }
+}
