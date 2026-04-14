@@ -348,6 +348,16 @@ def get_models(host: str) -> List[dict]:
     return r.json().get("models", [])
 
 
+def delete_model(host: str, model_name: str) -> None:
+    """Delete a model from local Ollama storage (equivalent to ollama rm)."""
+    r = requests.delete(
+        f"http://{host}:{OLLAMA_PORT}/api/delete",
+        json={"model": model_name},
+        timeout=30,
+    )
+    r.raise_for_status()
+
+
 def unload_model(host: str, model_name: str) -> None:
     """Force Ollama to evict a model from VRAM immediately."""
     try:

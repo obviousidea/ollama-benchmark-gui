@@ -21,6 +21,7 @@ from core import (
     DEFAULT_REFERENCE_INVOICE,
     load_tests,
     get_models,
+    delete_model,
     get_ollama_version,
     get_vram_status,
     run_benchmark,
@@ -44,15 +45,34 @@ class Separator(ctk.CTkFrame):
         super().__init__(parent, height=1, fg_color=("gray70", "gray30"), **kwargs)
 
 
-class ModelCheckbox(ctk.CTkCheckBox):
-    def __init__(self, parent, model_name: str, size_label: str = "", **kwargs):
-        self.var = ctk.BooleanVar(value=False)
-        label = model_name if not size_label else f"{model_name}  ({size_label})"
-        super().__init__(
-            parent, text=label, variable=self.var,
-            font=ctk.CTkFont(size=12), **kwargs,
-        )
+class ModelCheckbox(ctk.CTkFrame):
+    def __init__(self, parent, model_name: str, size_label: str = "",
+                 on_delete=None, **kwargs):
+        super().__init__(parent, fg_color="transparent", **kwargs)
         self.model_name = model_name
+        self.var = ctk.BooleanVar(value=False)
+        self._on_delete = on_delete
+
+        self.grid_columnconfigure(0, weight=1)
+
+        label = model_name if not size_label else f"{model_name}  ({size_label})"
+        ctk.CTkCheckBox(
+            self, text=label, variable=self.var,
+            font=ctk.CTkFont(size=12),
+        ).grid(row=0, column=0, sticky="w")
+
+        ctk.CTkButton(
+            self, text="🗑", width=26, height=22,
+            fg_color="transparent",
+            hover_color="#8b0000",
+            text_color=("gray50", "gray55"),
+            font=ctk.CTkFont(size=13),
+            command=self._ask_delete,
+        ).grid(row=0, column=1, padx=(4, 0))
+
+    def _ask_delete(self):
+        if self._on_delete:
+            self._on_delete(self.model_name)
 
 
 class ResultCard(ctk.CTkFrame):
@@ -1047,8 +1067,13 @@ class OllamaBenchmarkApp(ctk.CTk):
         saved = self._load_selections().get(self._selected_host, None)
         saved_set = set(saved) & available_names if saved is not None else set()
         for m in models:
-            cb = ModelCheckbox(self._models_frame, m.get("name", ""), self._fmt_size(m.get("size", 0)))
-            cb.pack(anchor="w", padx=6, pady=2)
+            cb = ModelCheckbox(
+                self._models_frame,
+                m.get("name", ""),
+                self._fmt_size(m.get("size", 0)),
+                on_delete=self._delete_model_prompt,
+            )
+            cb.pack(anchor="w", padx=6, pady=2, fill="x")
             if saved is not None:
                 cb.var.set(m.get("name", "") in saved_set)
             self._model_checkboxes.append(cb)
@@ -1059,6 +1084,35 @@ class OllamaBenchmarkApp(ctk.CTk):
             w.destroy()
         ctk.CTkLabel(self._models_frame, text=f"Error: {err}", font=ctk.CTkFont(size=11), text_color="#e74c3c").pack(pady=6)
         self._log(f"Models error: {err}")
+
+    # ── Model deletion ────────────────────────────────────────────────────────
+
+    def _delete_model_prompt(self, model_name: str):
+        confirmed = messagebox.askyesno(
+            "Supprimer le modèle",
+            f"Supprimer '{model_name}' du stockage Ollama local ?\n\nCette action est irréversible.",
+            icon="warning",
+        )
+        if confirmed:
+            self._do_delete_model(model_name)
+
+    def _do_delete_model(self, model_name: str):
+        self._log(f"Suppression de {model_name}…")
+
+        def _run():
+            try:
+                delete_model(self._selected_host, model_name)
+                self.after(0, lambda: (
+                    self._log(f"Modèle '{model_name}' supprimé."),
+                    self._load_models(self._selected_host),
+                ))
+            except Exception as exc:
+                self.after(0, lambda: (
+                    self._log(f"Erreur suppression : {exc}"),
+                    messagebox.showerror("Échec de la suppression", str(exc)),
+                ))
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _select_all(self):
         for cb in self._model_checkboxes:
