@@ -110,6 +110,9 @@ def main():
     print(f"  uv       : {uv_ver}")
     print()
 
+    # Sync env: recrée le venv si cassé, installe/màj les dépendances
+    subprocess.run([uv, "sync", "--quiet"], cwd=str(PROJECT_DIR))
+
     print_version(uv)
     print()
 

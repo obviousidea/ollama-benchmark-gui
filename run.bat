@@ -18,6 +18,9 @@ echo.
 for /f "tokens=*" %%i in ('uv --version') do echo   uv       : %%i
 echo.
 
+REM ── Sync env (recrée le venv si cassé, installe les deps manquantes) ────────
+uv sync --quiet
+
 uv run python -c "from versioning import get_full_label; print('  ' + get_full_label())"
 echo.
 
