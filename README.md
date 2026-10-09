@@ -100,6 +100,7 @@ Click **↺ Reload tests** in the sidebar to apply changes without restarting.
 ```
 app.py              — UI (CustomTkinter)
 core.py             — benchmark engine, network scan, VRAM monitor
+bench_cli.py        — headless benchmark + tok/s comparison with past reports (run after each Ollama update)
 versioning.py       — semantic versioning helpers
 bump.py             — CLI tool to bump major/minor/patch
 start.py            — cross-platform launcher
@@ -110,6 +111,16 @@ sample_invoice.pdf  — sample PDF for invoice extraction test
 goldorak.jpg        — sample image for vision test
 pyproject.toml      — dependencies
 ```
+
+## Track performance across Ollama versions
+
+```
+uv run bench_cli.py                     # re-run models from past reports, then compare
+uv run bench_cli.py -m ministral-3:8b   # specific models
+uv run bench_cli.py --compare-only      # print history only
+```
+
+Reports now record the Ollama version, so each run can be tied to a release.
 
 ---
 

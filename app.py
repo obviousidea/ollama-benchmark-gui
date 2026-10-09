@@ -814,7 +814,7 @@ class OllamaBenchmarkApp(ctk.CTk):
             initialfile=f"benchmark_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
         )
         if path:
-            export_report(self._summaries, path)
+            export_report(self._summaries, path, self._ollama_version)
             self._log(f"Report exported: {path}")
 
     @staticmethod
