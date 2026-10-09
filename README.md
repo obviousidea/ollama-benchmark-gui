@@ -25,6 +25,7 @@ Built with Python + CustomTkinter. No server, no cloud, runs fully offline.
 - **Per-app breakdown** — browsers (Chrome, Edge, Firefox…), Electron apps (Teams, Discord, VS Code, Zoom, Slack…), creative tools (OBS, Photoshop, After Effects, DaVinci Resolve, NVIDIA Broadcast…)
 - Estimated reclaimable VRAM displayed per app
 - CPU offload detection — warns when a model overflows VRAM
+- **Pre-flight check before each model** (local NVIDIA GPU) — estimates weights + KV cache (from `/api/show`, honours `OLLAMA_KV_CACHE_TYPE`) vs free VRAM; if short, automatically unloads other Ollama models, then warns with the deficit, reclaimable apps, heavy AI apps (ComfyUI, LM Studio…) and a `num_ctx` that would fit. Never closes your applications.
 
 ### Infrastructure
 - **LAN scan** — auto-discover all Ollama instances on your local network

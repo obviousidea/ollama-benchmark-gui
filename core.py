@@ -6,6 +6,7 @@ Network scanning, Ollama API client, benchmark runner (text + vision + web + inv
 import base64
 import ipaddress
 import json
+import os
 import re
 import socket
 import subprocess
@@ -442,6 +443,142 @@ def get_ollama_version(host: str) -> str:
         return r.json().get("version", "?")
     except Exception:
         return "?"
+
+
+# ─── VRAM pre-flight ──────────────────────────────────────────────────────────
+
+DEFAULT_NUM_CTX = 8192  # server default varies with version/VRAM; err on the safe side
+VRAM_OVERHEAD_MB = 600  # compute graph + CUDA context
+_KV_BYTES = {"f16": 2.0, "q8_0": 1.0625, "q4_0": 0.5625}
+
+
+def _is_local_host(host: str) -> bool:
+    return host in ("127.0.0.1", "localhost", "::1") or host == get_local_ip()
+
+
+def _kv_mb_per_token(info: dict) -> float:
+    """KV cache MB per context token, from /api/show model_info (0.0 if unknown)."""
+    def _get(suffix: str):
+        for k, v in info.items():
+            if k.endswith(suffix):
+                return v
+        return None
+
+    layers = _get(".block_count")
+    heads = _get(".attention.head_count")
+    kv_heads = _get(".attention.head_count_kv") or heads
+    emb = _get(".embedding_length")
+    head_dim = _get(".attention.key_length") or (emb / heads if emb and heads else None)
+    if not (layers and kv_heads and head_dim):
+        return 0.0
+    kv_sum = sum(kv_heads) if isinstance(kv_heads, list) else kv_heads * layers
+    kv_type = os.environ.get("OLLAMA_KV_CACHE_TYPE", "f16").lower()
+    per_elem = _KV_BYTES.get(kv_type, 2.0)
+    return 2 * kv_sum * head_dim * per_elem / (1024 * 1024)  # K + V
+
+
+def estimate_model_vram_mb(host: str, model: str, num_ctx: int = 0) -> int:
+    """Conservative VRAM need: weights + KV cache + overhead. 0 if model unknown."""
+    weights = 0
+    try:
+        for m in get_models(host):
+            if m.get("name") == model or m.get("model") == model:
+                weights = int(m.get("size", 0)) // (1024 * 1024)
+                break
+    except Exception:
+        return 0
+    if not weights:
+        return 0
+    ctx = num_ctx if num_ctx > 0 else DEFAULT_NUM_CTX
+    kv = 0.0
+    try:
+        r = requests.post(f"http://{host}:{OLLAMA_PORT}/api/show", json={"model": model}, timeout=10)
+        r.raise_for_status()
+        kv = _kv_mb_per_token(r.json().get("model_info", {})) * ctx
+    except Exception:
+        kv = weights * 0.1  # unknown architecture: assume 10 % of weights
+    return int(weights + kv + VRAM_OVERHEAD_MB)
+
+
+def _unload_others(host: str, keep: str) -> List[str]:
+    """Evict every loaded Ollama model except `keep`. Returns the evicted names."""
+    evicted: List[str] = []
+    try:
+        r = requests.get(f"http://{host}:{OLLAMA_PORT}/api/ps", timeout=3)
+        for m in r.json().get("models", []):
+            name = m.get("name") or m.get("model", "")
+            if name and name != keep:
+                unload_model(host, name)
+                evicted.append(name)
+    except Exception:
+        pass
+    if evicted:
+        time.sleep(1.5)  # let the driver release the memory
+    return evicted
+
+
+_HEAVY_GPU_HINTS = ("comfy", "stable-diffusion", "automatic1111", "invoke", "lm studio", "lmstudio",
+                    "koboldcpp", "llama-server", "text-generation", "vllm", "fooocus")
+
+
+def _heavy_gpu_apps() -> List[str]:
+    """Names of known AI apps with a GPU context (per-process VRAM is N/A under WDDM)."""
+    out = _run_cmd(["nvidia-smi", "--query-compute-apps=pid,process_name", "--format=csv,noheader"])
+    found: List[str] = []
+    for line in out.splitlines():
+        low = line.lower()
+        if any(h in low for h in _HEAVY_GPU_HINTS):
+            name = line.split(",", 1)[-1].strip()
+            hint = next(h for h in _HEAVY_GPU_HINTS if h in low)
+            label = f"{hint.title()} ({name})"
+            if label not in found:
+                found.append(label)
+    return found
+
+
+def vram_preflight(
+    host: str, model: str, num_ctx: int = 0, log_cb: Optional[Callable] = None,
+) -> bool:
+    """Check the model fits in free VRAM before loading it (local NVIDIA GPU only).
+
+    If it does not, evict other Ollama models first (safe, they reload on demand).
+    If it still does not fit, warn with the deficit, the heaviest apps and a
+    context size that would fit. Never closes user applications. Returns True if OK.
+    """
+    log = log_cb or (lambda *_: None)
+    if not _is_local_host(host):
+        return True
+    need = estimate_model_vram_mb(host, model, num_ctx)
+    status = get_vram_status(host)
+    if not need or not status.available:
+        return True
+
+    if status.free_mb < need:
+        evicted = _unload_others(host, keep=model)
+        if evicted:
+            log(f"  ↩  Pre-flight: unloaded {', '.join(evicted)} to free VRAM")
+            status = get_vram_status(host)
+
+    if status.free_mb >= need:
+        log(f"  ✓  VRAM pre-flight: ~{need / 1024:.1f} GB needed, {status.free_mb / 1024:.1f} GB free")
+        return True
+
+    deficit = need - status.free_mb
+    log(f"  ⚠  VRAM pre-flight: ~{need / 1024:.1f} GB needed, only {status.free_mb / 1024:.1f} GB free "
+        f"(short by ~{deficit / 1024:.1f} GB) — the model will spill to CPU/RAM and run much slower")
+    if status.app_breakdown:
+        top = sorted(status.app_breakdown.items(), key=lambda x: -x[1])[:4]
+        log("     Closing could free: " + ", ".join(f"{n} ~{v} MB" for n, v in top))
+    heavy = _heavy_gpu_apps()
+    if heavy:
+        log("     Other AI apps holding the GPU (VRAM not attributable on Windows): " + ", ".join(heavy))
+    ctx = num_ctx if num_ctx > 0 else DEFAULT_NUM_CTX
+    mb_per_1k_ctx = estimate_model_vram_mb(host, model, ctx + 1024) - need
+    if mb_per_1k_ctx > 0:
+        fit_ctx = int(ctx - deficit * 1024 / mb_per_1k_ctx)
+        if fit_ctx >= 1024:
+            log(f"     Or lower num_ctx to ~{fit_ctx // 512 * 512} to fit in VRAM")
+    return False
 
 
 # ─── VRAM monitoring ──────────────────────────────────────────────────────────
@@ -1013,6 +1150,7 @@ def run_benchmark(
             log_cb(f"{'─' * 55}")
 
         summary = ModelSummary(model=model, host=host)
+        vram_preflight(host, model, num_ctx, log_cb)
 
         # ── Text tests ────────────────────────────────────────────────────
         first_text = True
