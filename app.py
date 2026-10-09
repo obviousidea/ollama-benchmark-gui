@@ -26,6 +26,7 @@ from core import (
     get_vram_status,
     run_benchmark,
     scan_network,
+    parse_scan_targets,
     scan_images,
     scan_pdfs,
     export_report,
@@ -345,6 +346,10 @@ class OllamaBenchmarkApp(ctk.CTk):
         _sec("1 — Network discovery")
         self._scan_btn = ctk.CTkButton(p, text="Scan network", height=32, command=self._start_scan)
         self._scan_btn.grid(row=row, column=0, padx=12, pady=2, sticky="ew"); row += 1
+
+        self._scan_targets = ctk.CTkEntry(
+            p, height=28, placeholder_text="Extra: 10.10.0.0/16, 10.10.13.1-50, 10.10.100.7")
+        self._scan_targets.grid(row=row, column=0, padx=12, pady=2, sticky="ew"); row += 1
 
         self._scan_bar = ctk.CTkProgressBar(p, height=4)
         self._scan_bar.grid(row=row, column=0, padx=12, pady=2, sticky="ew")
@@ -985,6 +990,11 @@ class OllamaBenchmarkApp(ctk.CTk):
     def _start_scan(self):
         if self._scanning:
             return
+        try:
+            extra = parse_scan_targets(self._scan_targets.get())
+        except (ValueError, OSError) as e:
+            self._scan_lbl.configure(text=f"Invalid targets: {e}")
+            return
         self._scanning = True
         self._scan_btn.configure(state="disabled", text="Scanning…")
         self._scan_bar.set(0)
@@ -998,7 +1008,7 @@ class OllamaBenchmarkApp(ctk.CTk):
             hosts = scan_network(lambda pct, msg: (
                 self.after(0, lambda: self._scan_bar.set(pct)),
                 self.after(0, lambda: self._scan_lbl.configure(text=msg)),
-            ))
+            ), extra)
             self.after(0, lambda: self._on_scan_done(hosts))
 
         threading.Thread(target=_run, daemon=True).start()

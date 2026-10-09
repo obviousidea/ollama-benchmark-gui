@@ -4,6 +4,7 @@ Network scanning, Ollama API client, benchmark runner (text + vision + web + inv
 """
 
 import base64
+import ipaddress
 import json
 import re
 import socket
@@ -306,12 +307,62 @@ def _check_ollama(ip: str) -> Optional[str]:
     return None
 
 
+MAX_SCAN_TARGETS = 70000  # a /16 is 65 534 hosts
+
+
+def parse_scan_targets(spec: str) -> List[str]:
+    """Parse comma/space separated targets into IPs.
+
+    Accepts: single IP or hostname, CIDR (10.10.0.0/16), full range
+    (10.10.13.1-10.10.13.50) or short range (10.10.13.1-50).
+    Raises ValueError on invalid input or if more than MAX_SCAN_TARGETS hosts.
+    """
+    ips: List[str] = []
+    seen = set()
+
+    def _add(ip: str):
+        if ip not in seen:
+            seen.add(ip)
+            ips.append(ip)
+
+    for item in re.split(r"[,;\s]+", spec.strip()):
+        if not item:
+            continue
+        if "/" in item:
+            net = ipaddress.ip_network(item, strict=False)
+            if net.num_addresses > MAX_SCAN_TARGETS + 2:
+                raise ValueError(f"{item}: too large (max /16)")
+            for h in net.hosts():
+                _add(str(h))
+        elif "-" in item:
+            start_s, end_s = item.split("-", 1)
+            start = ipaddress.ip_address(start_s)
+            end = (ipaddress.ip_address(end_s) if "." in end_s
+                   else ipaddress.ip_address(".".join(start_s.split(".")[:3] + [end_s])))
+            if end < start or int(end) - int(start) >= MAX_SCAN_TARGETS:
+                raise ValueError(f"{item}: invalid or too large range")
+            for n in range(int(start), int(end) + 1):
+                _add(str(ipaddress.ip_address(n)))
+        else:
+            try:
+                _add(str(ipaddress.ip_address(item)))
+            except ValueError:
+                _add(socket.gethostbyname(item))  # hostname; OSError if unresolved
+        if len(ips) > MAX_SCAN_TARGETS:
+            raise ValueError("too many scan targets")
+    return ips
+
+
 def scan_network(
     progress_cb: Optional[Callable[[float, str], None]] = None,
+    extra_targets: Optional[List[str]] = None,
 ) -> List[str]:
     local_ip = get_local_ip()
     prefix = ".".join(local_ip.split(".")[:3])
     candidates: List[str] = [f"{prefix}.{i}" for i in range(1, 255)]
+    for ip in extra_targets or []:
+        if ip not in candidates:
+            candidates.append(ip)
     if "127.0.0.1" not in candidates:
         candidates.insert(0, "127.0.0.1")
 
@@ -319,12 +370,12 @@ def scan_network(
     total = len(candidates)
     completed = 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=64) as exe:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=256 if total > 1000 else 64) as exe:
         futures = {exe.submit(_check_ollama, ip): ip for ip in candidates}
         for future in concurrent.futures.as_completed(futures):
             completed += 1
             if progress_cb:
-                progress_cb(completed / total, f"Scan {prefix}.x — {completed}/{total}")
+                progress_cb(completed / total, f"Scan — {completed}/{total}")
             result = future.result()
             if result:
                 found.append(result)
